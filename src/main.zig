@@ -1,11 +1,12 @@
 const std = @import("std");
-const PTRACE_ME: i32 = 0;
+const c = @cImport({
+    @cInclude("sys/ptrace.h");
+    @cInclude("sys/user.h");
+    @cInclude("sys/wait.h");
+    @cInclude("errno.h");
+});
 
 pub fn main() !void {
-    const stdout_file = std.io.getStdOut().writer();
-    var bw = std.io.bufferedWriter(stdout_file);
-    const stdout = bw.writer();
-
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -17,16 +18,17 @@ pub fn main() !void {
     const child = try std.posix.fork();
     if (child == 0) {
         // child process
-        try std.posix.ptrace(PTRACE_ME, 0, 0, 0);
+        try std.posix.ptrace(c.PTRACE_TRACEME, 0, 0, 0);
         return std.process.execv(allocator, args[1..]);
     } else {
         // parent process
-        const result = std.posix.waitpid(child, 0);
-        try stdout.print("Result Status:{}", .{result.status});
-        if (std.os.linux.W.IFEXITED(result.status)) {
-            try stdout.print("wow", .{});
+        _ = std.posix.waitpid(child, 0);
+        while (true) {
+            try std.posix.ptrace(c.PTRACE_SYSCALL, child, 0, 0);
+            const res = std.posix.waitpid(child, 0);
+            if (std.os.linux.W.IFEXITED(res.status)) {
+                break;
+            }
         }
     }
-
-    try bw.flush(); // don't forget to flush!
 }
